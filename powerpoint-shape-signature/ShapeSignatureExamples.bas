@@ -73,3 +73,54 @@ Public Function CountMatchesInPresentation(ByRef pres As Presentation, _
 SoftFail:
     CountMatchesInPresentation = 0
 End Function
+
+Public Sub Example_SimilarityPercent()
+    Dim shp As Shape
+    Dim sig As String
+    Dim pct As Long
+    Dim explain As String
+
+    On Error GoTo Fail
+    If ActiveWindow.Selection.Type <> ppSelectionShapes Then
+        MsgBox "Выделите фигуру", vbExclamation
+        Exit Sub
+    End If
+    Set shp = ActiveWindow.Selection.ShapeRange(1)
+    sig = InputBox("Сигнатура:", "Похожесть %")
+    If Len(sig) = 0 Then Exit Sub
+
+    pct = ShapeSimilarityPercent(shp, sig)
+    explain = ShapeSimilarityExplain(shp, sig)
+    MsgBox "Процент: " & CStr(pct) & vbCrLf & explain, vbInformation
+    Exit Sub
+Fail:
+    MsgBox "Ошибка: " & Err.Description, vbCritical
+End Sub
+
+Public Sub Example_FindSimilar()
+    Dim sig As String
+    Dim col As Collection
+    Dim i As Long
+    Dim shp As Shape
+    Dim msg As String
+
+    On Error GoTo Fail
+    sig = InputBox("Сигнатура:", "Поиск похожих")
+    If Len(sig) = 0 Then Exit Sub
+
+    Set col = FindSimilarShapes(ActivePresentation, sig, 70)
+    msg = "Найдено объектов: " & CStr(col.Count) & vbCrLf
+    For i = 1 To col.Count
+        Set shp = col(i)
+        msg = msg & "• " & shp.Name & " — " & _
+              CStr(ShapeSimilarityPercent(shp, sig)) & "%" & vbCrLf
+        If i >= 30 Then
+            msg = msg & "…"
+            Exit For
+        End If
+    Next i
+    MsgBox msg, vbInformation
+    Exit Sub
+Fail:
+    MsgBox "Ошибка: " & Err.Description, vbCritical
+End Sub

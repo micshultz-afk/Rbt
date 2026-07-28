@@ -1,5 +1,12 @@
 # PowerPoint Shape Signature
 
-VBA-модуль для PowerPoint 2013: построение устойчивых сигнатур Shape и проверка совпадения.
+Офлайн VBA-модуль для PowerPoint 2013: устойчивые сигнатуры Shape и проверка совпадения.
 
-См. каталог [`powerpoint-shape-signature/`](powerpoint-shape-signature/README.md).
+См. [`powerpoint-shape-signature/README.md`](powerpoint-shape-signature/README.md).
+
+Ключевой API:
+
+```vba
+sig = BuildSignatureByShapeName("MyTarget", ActivePresentation)
+ok  = ShapeMatchesSignature(shp, sig)   ' True / False
+```

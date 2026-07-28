@@ -52,6 +52,32 @@ Public Function ShapeMatchesSignature(ByRef shp As Shape, ByVal sig As String) A
 
 Только 2 аргумента. Ошибки глотаются → `False` (без вылетов).
 
+## Похожесть и поиск похожих
+
+```vba
+' 0..100 — насколько shape похож на сигнатуру
+pct = ShapeSimilarityPercent(shp, sig)
+
+' Понятное текстовое объяснение: "85% — высокая похожесть. Совпало: … Отличается: …"
+msg = ShapeSimilarityExplain(shp, sig)
+
+' Все похожие фигуры в презентации / на слайде (Collection of Shape)
+Set col = FindSimilarShapes(ActivePresentation, sig, 70)
+Set col = FindSimilarShapesOnSlide(ActiveWindow.View.Slide, sig, 70)
+
+' Готовый текстовый отчёт поиска
+report = FindSimilarShapesReport(ActivePresentation, sig, 70)
+```
+
+Правила оценки:
+- геометрия в **долях слайда** → независимо от DPI/монитора/ОС;
+- **позиция = область** (сетка 3×3 по центру фигуры), смещения внутри/рядом с областью не обнуляют похожесть;
+- **цвета заливки/линии** имеют очень малый вес (могут меняться);
+- цвет текста не используется; учитываются имя/кегль шрифта и (слабее) хеш текста;
+- тип/размер/пропорции/caps — высокий вес;
+- ошибки OM → `0` / пустая коллекция / понятное сообщение, без вылетов.
+
+Макросы: `TestSimilaritySelected`, `TestFindSimilarInPresentation`.
 ## Сжатие сигнатуры (S2)
 
 Старый текстовый `S1` мог приближаться к ~90 символам на полном наборе.

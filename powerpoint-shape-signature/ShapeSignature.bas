@@ -9,9 +9,12 @@ Attribute VB_Name = "ShapeSignature"
 '
 ' Публичный API:
 '   ShapeMatchesSignature(ByRef shp, ByVal sig) As Boolean
+'   ShapeSimilarityPercent(ByRef shp, ByVal sig) As Long   ' 0..100
+'   ShapeSimilarityExplain(ByRef shp, ByVal sig) As String
+'   FindSimilarShapes(ByRef pres, ByVal sig, [minPercent]) As Collection
+'   FindSimilarShapesOnSlide(ByRef sld, ByVal sig, [minPercent]) As Collection
 '   BuildSignatureByShapeName(ByVal shapeName, ByRef pres) As String
-'   BuildSignatureFromSelection
-'   BuildUniqueSignatureFromFiles
+'   BuildSignatureFromSelection / BuildUniqueSignatureFromFiles
 '   MakeSignatureFromShape / GetShapeFeatureString / TestMatchSelected
 '   MarkSelectedAsTargets / ClearTargetMarks
 '==============================================================================
@@ -26,6 +29,10 @@ Private Const GEO_SCALE As Long = 10000
 Private Const GEO_TOL As Long = 50
 Private Const ROT_TOL As Long = 5
 Private Const FONT_TOL As Long = 2
+' Сетка областей слайда для мягкого сравнения позиции (независима от DPI)
+Private Const REGION_GRID As Long = 3
+' Порог «похож» по умолчанию для поиска
+Private Const DEFAULT_SIM_MIN As Long = 70
 
 ' Биты маски S2 (порядок фиксирован)
 Private Const F_TYPE As Long = 1
@@ -97,6 +104,247 @@ Public Function ShapeMatchesSignature(ByRef shp As Shape, ByVal sig As String) A
 SoftFail:
     ShapeMatchesSignature = False
 End Function
+
+'--- Похожесть Shape к сигнатуре: 0..100 (понятный процент) -------------------
+' ByRef shp + ByVal sig. Цвета текста/фона имеют малый вес (могут меняться).
+' Позиция учитывается как ОБЛАСТЬ слайда (сетка), допускаются смещения.
+Public Function ShapeSimilarityPercent(ByRef shp As Shape, ByVal sig As String) As Long
+    Dim mask As Long
+    Dim proto As ShapeFeat
+    Dim f As ShapeFeat
+    Dim score As Double
+    Dim explain As String
+
+    On Error GoTo SoftFail
+    ShapeSimilarityPercent = 0
+    If shp Is Nothing Then Exit Function
+    If Len(Trim$(sig)) = 0 Then Exit Function
+    If Not ParseSignatureToFeat(sig, mask, proto) Then Exit Function
+    If mask = 0 Then Exit Function
+
+    f = ExtractFeatures(shp)
+    If Not f.Valid Then Exit Function
+
+    score = ComputeSimilarityScore(f, mask, proto, explain)
+    If score < 0# Then score = 0#
+    If score > 100# Then score = 100#
+    ShapeSimilarityPercent = CLng(Round(score, 0))
+    Exit Function
+SoftFail:
+    ShapeSimilarityPercent = 0
+End Function
+
+'--- Человекочитаемое объяснение похожести -----------------------------------
+Public Function ShapeSimilarityExplain(ByRef shp As Shape, ByVal sig As String) As String
+    Dim mask As Long
+    Dim proto As ShapeFeat
+    Dim f As ShapeFeat
+    Dim score As Double
+    Dim explain As String
+    Dim pct As Long
+    Dim level As String
+
+    On Error GoTo SoftFail
+    ShapeSimilarityExplain = "0% — ошибка или недостаточно данных для сравнения."
+
+    If shp Is Nothing Then
+        ShapeSimilarityExplain = "0% — фигура не задана (Nothing)."
+        Exit Function
+    End If
+    If Len(Trim$(sig)) = 0 Then
+        ShapeSimilarityExplain = "0% — пустая сигнатура."
+        Exit Function
+    End If
+    If Not ParseSignatureToFeat(sig, mask, proto) Then
+        ShapeSimilarityExplain = "0% — сигнатура повреждена или неизвестного формата."
+        Exit Function
+    End If
+    If mask = 0 Then
+        ShapeSimilarityExplain = "0% — пустая маска признаков в сигнатуре."
+        Exit Function
+    End If
+
+    f = ExtractFeatures(shp)
+    If Not f.Valid Then
+        ShapeSimilarityExplain = "0% — не удалось прочитать признаки фигуры."
+        Exit Function
+    End If
+
+    score = ComputeSimilarityScore(f, mask, proto, explain)
+    If score < 0# Then score = 0#
+    If score > 100# Then score = 100#
+    pct = CLng(Round(score, 0))
+
+    If pct >= 90 Then
+        level = "очень высокая похожесть"
+    ElseIf pct >= 70 Then
+        level = "высокая похожесть"
+    ElseIf pct >= 50 Then
+        level = "средняя похожесть"
+    ElseIf pct >= 30 Then
+        level = "низкая похожесть"
+    Else
+        level = "почти не похож"
+    End If
+
+    ShapeSimilarityExplain = CStr(pct) & "% — " & level & ". " & explain
+    Exit Function
+SoftFail:
+    ShapeSimilarityExplain = "0% — сбой сравнения: " & Err.Description
+End Function
+
+'--- Поиск похожих во всей презентации (Collection of Shape) -----------------
+Public Function FindSimilarShapes(ByRef pres As Presentation, ByVal sig As String, _
+                                  Optional ByVal minPercent As Long = DEFAULT_SIM_MIN) As Collection
+    Dim result As Collection
+    Dim sld As Slide
+    Dim tmp As Collection
+    Dim i As Long
+
+    On Error GoTo SoftFail
+    Set result = New Collection
+    Set FindSimilarShapes = result
+
+    If pres Is Nothing Then Exit Function
+    If Len(Trim$(sig)) = 0 Then Exit Function
+    If minPercent < 0 Then minPercent = 0
+    If minPercent > 100 Then minPercent = 100
+
+    For Each sld In pres.Slides
+        Set tmp = FindSimilarShapesOnSlide(sld, sig, minPercent)
+        If Not tmp Is Nothing Then
+            For i = 1 To tmp.Count
+                result.Add tmp(i)
+            Next i
+        End If
+    Next sld
+
+    Set FindSimilarShapes = result
+    Exit Function
+SoftFail:
+    On Error Resume Next
+    Set FindSimilarShapes = New Collection
+End Function
+
+'--- Поиск похожих на одном слайде -------------------------------------------
+Public Function FindSimilarShapesOnSlide(ByRef sld As Slide, ByVal sig As String, _
+                                         Optional ByVal minPercent As Long = DEFAULT_SIM_MIN) As Collection
+    Dim result As Collection
+    Dim shp As Shape
+    Dim pct As Long
+    Dim mask As Long
+    Dim proto As ShapeFeat
+
+    On Error GoTo SoftFail
+    Set result = New Collection
+    Set FindSimilarShapesOnSlide = result
+
+    If sld Is Nothing Then Exit Function
+    If Len(Trim$(sig)) = 0 Then Exit Function
+    If Not ParseSignatureToFeat(sig, mask, proto) Then Exit Function
+    If minPercent < 0 Then minPercent = 0
+    If minPercent > 100 Then minPercent = 100
+
+    For Each shp In sld.Shapes
+        CollectSimilarInTree shp, sig, minPercent, result
+    Next shp
+
+    Set FindSimilarShapesOnSlide = result
+    Exit Function
+SoftFail:
+    On Error Resume Next
+    Set FindSimilarShapesOnSlide = New Collection
+End Function
+
+'--- Отчёт поиска по презентации (понятная строка) ---------------------------
+Public Function FindSimilarShapesReport(ByRef pres As Presentation, ByVal sig As String, _
+                                        Optional ByVal minPercent As Long = DEFAULT_SIM_MIN) As String
+    Dim sld As Slide
+    Dim shp As Shape
+    Dim pct As Long
+    Dim n As Long
+    Dim lines As String
+    Dim sldIdx As Long
+
+    On Error GoTo SoftFail
+    FindSimilarShapesReport = "Совпадений не найдено."
+
+    If pres Is Nothing Then
+        FindSimilarShapesReport = "Ошибка: презентация не задана."
+        Exit Function
+    End If
+    If Len(Trim$(sig)) = 0 Then
+        FindSimilarShapesReport = "Ошибка: пустая сигнатура."
+        Exit Function
+    End If
+    If minPercent < 0 Then minPercent = 0
+    If minPercent > 100 Then minPercent = 100
+
+    lines = ""
+    n = 0
+    For Each sld In pres.Slides
+        On Error Resume Next
+        sldIdx = sld.SlideIndex
+        If Err.Number <> 0 Then
+            Err.Clear
+            sldIdx = 0
+        End If
+        On Error GoTo SoftFail
+        AppendSimilarReportTree sld.Shapes, sig, minPercent, sldIdx, lines, n
+    Next sld
+
+    If n = 0 Then
+        FindSimilarShapesReport = "Похожих фигур >= " & CStr(minPercent) & "% не найдено."
+    Else
+        FindSimilarShapesReport = "Найдено: " & CStr(n) & " (порог " & CStr(minPercent) & "%)" & _
+                                  vbCrLf & lines
+    End If
+    Exit Function
+SoftFail:
+    FindSimilarShapesReport = "Сбой поиска: " & Err.Description
+End Function
+
+Public Sub TestSimilaritySelected()
+    Dim shp As Shape
+    Dim sig As String
+    Dim msg As String
+    On Error GoTo Fail
+    If Not SelectionHasShapes() Then
+        MsgBox "Выделите одну фигуру.", vbExclamation
+        Exit Sub
+    End If
+    Set shp = ActiveWindow.Selection.ShapeRange(1)
+    sig = InputBox("Вставьте сигнатуру:", "ShapeSimilarityPercent")
+    If Len(sig) = 0 Then Exit Sub
+    msg = ShapeSimilarityExplain(shp, sig) & vbCrLf & vbCrLf & _
+          "Числовой процент: " & CStr(ShapeSimilarityPercent(shp, sig))
+    MsgBox msg, vbInformation, "Похожесть"
+    Exit Sub
+Fail:
+    MsgBox "Ошибка TestSimilaritySelected: " & Err.Description, vbCritical
+End Sub
+
+Public Sub TestFindSimilarInPresentation()
+    Dim sig As String
+    Dim report As String
+    Dim minP As String
+    Dim minPercent As Long
+    On Error GoTo Fail
+    If ActivePresentation Is Nothing Then
+        MsgBox "Нет активной презентации.", vbExclamation
+        Exit Sub
+    End If
+    sig = InputBox("Сигнатура для поиска:", "FindSimilarShapes")
+    If Len(sig) = 0 Then Exit Sub
+    minP = InputBox("Минимальный процент похожести (0..100):", "FindSimilarShapes", CStr(DEFAULT_SIM_MIN))
+    If Len(minP) = 0 Then Exit Sub
+    minPercent = CLng(Val(minP))
+    report = FindSimilarShapesReport(ActivePresentation, sig, minPercent)
+    MsgBox report, vbInformation, "Результат поиска"
+    Exit Sub
+Fail:
+    MsgBox "Ошибка TestFindSimilarInPresentation: " & Err.Description, vbCritical
+End Sub
 
 '--- Сигнатура по уникальному имени Shape внутри презентации -----------------
 ' Находит ВСЕ фигуры с данным Name (в т.ч. на разных слайдах и в группах),
@@ -796,6 +1044,298 @@ Private Function FeaturesMatchFeat(ByRef f As ShapeFeat, ByVal mask As Long, _
 SoftFail:
     FeaturesMatchFeat = False
 End Function
+
+'----- Оценка похожести (веса; цвета слабые; позиция = область) --------------
+Private Function ComputeSimilarityScore(ByRef f As ShapeFeat, ByVal mask As Long, _
+                                        ByRef proto As ShapeFeat, _
+                                        ByRef explain As String) As Double
+    Dim wSum As Double
+    Dim sSum As Double
+    Dim partsOk As String
+    Dim partsDiff As String
+    Dim w As Double
+    Dim s As Double
+
+    On Error GoTo SoftFail
+    ComputeSimilarityScore = 0#
+    explain = ""
+    wSum = 0#: sSum = 0#
+    partsOk = "": partsDiff = ""
+
+    ' Структура (высокий вес)
+    AddScore mask, F_TYPE, 20, SoftEqLong(f.TypeId, proto.TypeId), "тип", wSum, sSum, partsOk, partsDiff
+    AddScore mask, F_AUTO, 12, SoftEqLong(f.AutoId, proto.AutoId), "автотип", wSum, sSum, partsOk, partsDiff
+    AddScore mask, F_PH, 6, SoftEqLong(f.PhType, proto.PhType), "placeholder", wSum, sSum, partsOk, partsDiff
+    AddScore mask, F_CAPS, 8, SoftEqLong(f.Caps, proto.Caps), "возможности", wSum, sSum, partsOk, partsDiff
+
+    ' Размер / пропорции
+    AddScore mask, F_SIZE, 14, SoftGeoPair(f.W, f.H, proto.W, proto.H, 400), "размер", wSum, sSum, partsOk, partsDiff
+    AddScore mask, F_AR, 8, SoftAbsRatio(f.AR, proto.AR, 80), "пропорции", wSum, sSum, partsOk, partsDiff
+
+    ' Область слайда важнее точных координат (смещения допустимы)
+    If (mask And F_POS) <> 0 Then
+        w = 14
+        s = SoftRegionScore(f, proto)
+        wSum = wSum + w
+        sSum = sSum + w * s
+        If s >= 0.75 Then
+            AppendExplain partsOk, "область"
+        Else
+            AppendExplain partsDiff, "область"
+        End If
+    Else
+        ' Даже если POS нет в маске — слабо учитываем область (смещения/разные слайды)
+        w = 6
+        s = SoftRegionScore(f, proto)
+        wSum = wSum + w
+        sSum = sSum + w * s
+        If s >= 0.75 Then
+            AppendExplain partsOk, "область~"
+        ElseIf s < 0.4 Then
+            AppendExplain partsDiff, "область~"
+        End If
+    End If
+
+    AddScore mask, F_ROT, 4, SoftAbsRatio(f.Rot, proto.Rot, ROT_TOL * 8), "поворот", wSum, sSum, partsOk, partsDiff
+    AddScore mask, F_FLIP, 3, SoftEqLong(f.Flip, proto.Flip), "отражение", wSum, sSum, partsOk, partsDiff
+
+    ' Шрифт (имя/кегль) — без цвета текста
+    If (mask And F_FONT) <> 0 Then
+        w = 8
+        s = 0.5 * SoftEqLong(f.FontFnv, proto.FontFnv) + 0.5 * SoftAbsRatio(f.FontRel, proto.FontRel, FONT_TOL * 6)
+        wSum = wSum + w
+        sSum = sSum + w * s
+        If s >= 0.75 Then AppendExplain partsOk, "шрифт" Else AppendExplain partsDiff, "шрифт"
+    End If
+
+    ' Текст: средний/низкий вес (содержимое может меняться)
+    AddScore mask, F_TXH, 5, SoftEqLong(f.TxFnv, proto.TxFnv), "текст", wSum, sSum, partsOk, partsDiff
+
+    ' Цвета фона/линии — МОГУТ меняться → очень малый вес
+    If (mask And F_FILL) <> 0 Then
+        w = 2
+        s = SoftFillScore(f, proto)
+        wSum = wSum + w
+        sSum = sSum + w * s
+        If s >= 0.8 Then AppendExplain partsOk, "заливка" Else AppendExplain partsDiff, "цвет фона"
+    End If
+    If (mask And F_LINE) <> 0 Then
+        w = 2
+        s = SoftLineScore(f, proto)
+        wSum = wSum + w
+        sSum = sSum + w * s
+        If s >= 0.8 Then AppendExplain partsOk, "линия" Else AppendExplain partsDiff, "цвет линии"
+    End If
+
+    If wSum <= 0# Then
+        explain = "Нет сопоставимых признаков."
+        ComputeSimilarityScore = 0#
+        Exit Function
+    End If
+
+    ComputeSimilarityScore = 100# * (sSum / wSum)
+
+    explain = ""
+    If Len(partsOk) > 0 Then explain = "Совпало: " & partsOk & "."
+    If Len(partsDiff) > 0 Then
+        If Len(explain) > 0 Then explain = explain & " "
+        explain = explain & "Отличается: " & partsDiff & "."
+    End If
+    If Len(explain) = 0 Then explain = "Сравнение выполнено."
+    Exit Function
+SoftFail:
+    ComputeSimilarityScore = 0#
+    explain = "ошибка расчёта"
+End Function
+
+Private Sub AddScore(ByVal mask As Long, ByVal bit As Long, ByVal weight As Double, _
+                     ByVal soft As Double, ByVal label As String, _
+                     ByRef wSum As Double, ByRef sSum As Double, _
+                     ByRef partsOk As String, ByRef partsDiff As String)
+    If (mask And bit) = 0 Then Exit Sub
+    If soft < 0# Then soft = 0#
+    If soft > 1# Then soft = 1#
+    wSum = wSum + weight
+    sSum = sSum + weight * soft
+    If soft >= 0.75 Then
+        AppendExplain partsOk, label
+    ElseIf soft < 0.45 Then
+        AppendExplain partsDiff, label
+    End If
+End Sub
+
+Private Sub AppendExplain(ByRef bag As String, ByVal label As String)
+    If Len(bag) = 0 Then
+        bag = label
+    Else
+        bag = bag & ", " & label
+    End If
+End Sub
+
+Private Function SoftEqLong(ByVal a As Long, ByVal b As Long) As Double
+    If a = b Then SoftEqLong = 1# Else SoftEqLong = 0#
+End Function
+
+Private Function SoftAbsRatio(ByVal a As Long, ByVal b As Long, ByVal tol As Long) As Double
+    Dim d As Long
+    If tol <= 0 Then tol = 1
+    d = Abs(a - b)
+    If d >= tol Then
+        SoftAbsRatio = 0#
+    Else
+        SoftAbsRatio = 1# - (CDbl(d) / CDbl(tol))
+    End If
+End Function
+
+Private Function SoftGeoPair(ByVal a1 As Long, ByVal a2 As Long, _
+                             ByVal b1 As Long, ByVal b2 As Long, _
+                             ByVal tol As Long) As Double
+    SoftGeoPair = 0.5 * SoftAbsRatio(a1, b1, tol) + 0.5 * SoftAbsRatio(a2, b2, tol)
+End Function
+
+' Область: сетка REGION_GRID x REGION_GRID по центру фигуры
+Private Function SoftRegionScore(ByRef f As ShapeFeat, ByRef proto As ShapeFeat) As Double
+    Dim fx As Long, fy As Long, px As Long, py As Long
+    Dim dist As Long
+    On Error GoTo SoftFail
+    RegionOfFeat f, fx, fy
+    RegionOfFeat proto, px, py
+    dist = Abs(fx - px)
+    If Abs(fy - py) > dist Then dist = Abs(fy - py) ' Chebyshev
+    If dist = 0 Then
+        SoftRegionScore = 1#
+    ElseIf dist = 1 Then
+        SoftRegionScore = 0.7
+    ElseIf dist = 2 Then
+        SoftRegionScore = 0.35
+    Else
+        SoftRegionScore = 0.1
+    End If
+    Exit Function
+SoftFail:
+    SoftRegionScore = 0.5
+End Function
+
+Private Sub RegionOfFeat(ByRef f As ShapeFeat, ByRef rx As Long, ByRef ry As Long)
+    Dim cx As Long, cy As Long
+    Dim cell As Long
+    cell = GEO_SCALE \ REGION_GRID
+    If cell <= 0 Then cell = 1
+    cx = f.L + (f.W \ 2)
+    cy = f.T + (f.H \ 2)
+    If cx < 0 Then cx = 0
+    If cy < 0 Then cy = 0
+    If cx > GEO_SCALE Then cx = GEO_SCALE
+    If cy > GEO_SCALE Then cy = GEO_SCALE
+    rx = cx \ cell
+    ry = cy \ cell
+    If rx > REGION_GRID - 1 Then rx = REGION_GRID - 1
+    If ry > REGION_GRID - 1 Then ry = REGION_GRID - 1
+End Sub
+
+Private Function SoftFillScore(ByRef f As ShapeFeat, ByRef proto As ShapeFeat) As Double
+    ' Цвет фона может меняться — совпадение типа важнее точного RGB
+    Dim s As Double
+    On Error Resume Next
+    If f.FillType = proto.FillType Then
+        s = 0.7
+    Else
+        s = 0.2
+    End If
+    If proto.FillScheme >= 0 And f.FillScheme = proto.FillScheme Then
+        s = s + 0.3
+    ElseIf proto.FillRgb >= 0 And f.FillRgb = proto.FillRgb Then
+        s = s + 0.3
+    End If
+    If s > 1# Then s = 1#
+    SoftFillScore = s
+End Function
+
+Private Function SoftLineScore(ByRef f As ShapeFeat, ByRef proto As ShapeFeat) As Double
+    Dim s As Double
+    On Error Resume Next
+    If f.LineVis = proto.LineVis Then
+        s = 0.6
+    Else
+        SoftLineScore = 0.15
+        Exit Function
+    End If
+    If proto.LineVis = 0 Then
+        SoftLineScore = 1#
+        Exit Function
+    End If
+    If proto.LineRgb >= 0 And f.LineRgb = proto.LineRgb Then s = s + 0.25
+    s = s + 0.15 * SoftAbsRatio(f.LineWeight, proto.LineWeight, 80)
+    If s > 1# Then s = 1#
+    SoftLineScore = s
+End Function
+
+Private Sub CollectSimilarInTree(ByVal shp As Shape, ByVal sig As String, _
+                                 ByVal minPercent As Long, ByVal result As Collection)
+    Dim pct As Long
+    Dim i As Long
+    On Error Resume Next
+    If shp Is Nothing Then Exit Sub
+    pct = ShapeSimilarityPercent(shp, sig)
+    If pct >= minPercent Then result.Add shp
+    If shp.Type = msoGroup Then
+        For i = 1 To shp.GroupItems.Count
+            CollectSimilarInTree shp.GroupItems(i), sig, minPercent, result
+        Next i
+    End If
+End Sub
+
+Private Sub AppendSimilarReportTree(ByVal shapes As Object, ByVal sig As String, _
+                                    ByVal minPercent As Long, ByVal sldIdx As Long, _
+                                    ByRef lines As String, ByRef n As Long)
+    Dim shp As Shape
+    Dim pct As Long
+    Dim i As Long
+    Dim nm As String
+    On Error Resume Next
+    For Each shp In shapes
+        pct = ShapeSimilarityPercent(shp, sig)
+        If pct >= minPercent Then
+            n = n + 1
+            nm = shp.Name
+            If Err.Number <> 0 Then
+                Err.Clear
+                nm = "?"
+            End If
+            lines = lines & "• Слайд " & CStr(sldIdx) & ": «" & nm & "» — " & CStr(pct) & "%" & vbCrLf
+        End If
+        If shp.Type = msoGroup Then
+            For i = 1 To shp.GroupItems.Count
+                AppendSimilarReportOne shp.GroupItems(i), sig, minPercent, sldIdx, lines, n
+            Next i
+        End If
+    Next shp
+End Sub
+
+Private Sub AppendSimilarReportOne(ByVal shp As Shape, ByVal sig As String, _
+                                   ByVal minPercent As Long, ByVal sldIdx As Long, _
+                                   ByRef lines As String, ByRef n As Long)
+    Dim pct As Long
+    Dim i As Long
+    Dim nm As String
+    On Error Resume Next
+    If shp Is Nothing Then Exit Sub
+    pct = ShapeSimilarityPercent(shp, sig)
+    If pct >= minPercent Then
+        n = n + 1
+        nm = shp.Name
+        If Err.Number <> 0 Then
+            Err.Clear
+            nm = "?"
+        End If
+        lines = lines & "• Слайд " & CStr(sldIdx) & ": «" & nm & "» — " & CStr(pct) & "%" & vbCrLf
+    End If
+    If shp.Type = msoGroup Then
+        For i = 1 To shp.GroupItems.Count
+            AppendSimilarReportOne shp.GroupItems(i), sig, minPercent, sldIdx, lines, n
+        Next i
+    End If
+End Sub
 
 Private Function FeaturesEqualMask(ByRef a As ShapeFeat, ByRef b As ShapeFeat, ByVal mask As Long) As Boolean
     FeaturesEqualMask = FeaturesMatchFeat(b, mask, a)
