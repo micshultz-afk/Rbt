@@ -70,7 +70,7 @@ ok = ShapeMatchesSignature(someShape, "S1|…ваша сигнатура…")
 | `ClearTargetMarks` | Снять метки |
 | `BuildSignatureFromSelection` | Сигнатура из выделения vs соседи на слайде |
 | `BuildUniqueSignatureFromFiles` | Мультивыбор файлов + помеченные цели |
-| `ShapeMatchesSignature(shp, sig) As Boolean` | Распознавание |
+| `ShapeMatchesSignature(ByRef shp As Shape, ByVal sig As String) As Boolean` | Распознавание (только эти 2 аргумента) |
 | `MakeSignatureFromShape(shp) As String` | Полная сигнатура одной фигуры (без анализа уникальности) |
 | `BuildSignatureFromCollections(targets, others) As String` | Программная сборка без UI |
 | `GetShapeFeatureString(shp) As String` | Полный вектор признаков (отладка) |
