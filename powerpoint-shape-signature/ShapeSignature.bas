@@ -179,7 +179,7 @@ Public Sub BuildUniqueSignatureFromFiles()
     Set others = New Collection
     Set openedHere = New Collection
 
-    ' 1) Текущее выделение — тоже считаем целями (удобный путь без тегов)
+    ' 1) Текущее выделение — семена / цели
     If SelectionHasShapes() Then
         With ActiveWindow.Selection.ShapeRange
             For si = 1 To .Count
@@ -188,12 +188,7 @@ Public Sub BuildUniqueSignatureFromFiles()
         End With
     End If
 
-    ' 2) Активная презентация (помеченные тегом)
-    If Not ActivePresentation Is Nothing Then
-        CollectMarkedInPresentation ActivePresentation, targets, others
-    End If
-
-    ' 3) Диалог выбора файлов
+    ' 2) Диалог выбора файлов
     Set fd = Application.FileDialog(msoFileDialogFilePicker)
     With fd
         .AllowMultiSelect = True
@@ -202,7 +197,6 @@ Public Sub BuildUniqueSignatureFromFiles()
         .Filters.Add "PowerPoint", "*.pptx;*.ppt;*.pptm;*.ppsx;*.pps", 1
         .Filters.Add "Все файлы", "*.*", 2
         If .Show <> -1 Then
-            ' Отмена диалога — продолжаем только с уже собранным из Active
             If targets.Count = 0 Then
                 MsgBox "Отменено. Нет целевых фигур." & vbCrLf & _
                        "Выделите фигуры или выполните MarkSelectedAsTargets.", _
@@ -216,7 +210,7 @@ Public Sub BuildUniqueSignatureFromFiles()
         End If
     End With
 
-    ' 4) Семена для поиска аналогов в других файлах
+    ' 3) Семена для поиска аналогов
     Dim seedFeats() As ShapeFeat
     Dim hasSeeds As Boolean
     hasSeeds = False
@@ -228,9 +222,27 @@ Public Sub BuildUniqueSignatureFromFiles()
         Next i
     End If
 
+    ' 4) Активная презентация целиком
+    If Not ActivePresentation Is Nothing Then
+        If hasSeeds Then
+            CollectBySeedInPresentation ActivePresentation, seedFeats, targets, others
+        Else
+            CollectMarkedInPresentation ActivePresentation, targets, others
+        End If
+    End If
+
     ' 5) Обход выбранных файлов: теги ИЛИ совпадение с семенем
+    Dim activePath As String
+    activePath = ""
+    On Error Resume Next
+    If Not ActivePresentation Is Nothing Then activePath = LCase$(ActivePresentation.FullName)
+    On Error GoTo Fail
+
     For Each v In paths
         p = CStr(v)
+        If Len(activePath) > 0 Then
+            If LCase$(p) = activePath Then GoTo ContLoop
+        End If
         wasOpen = IsPresentationOpen(p)
         If wasOpen Then
             Set pres = FindOpenPresentation(p)
@@ -246,6 +258,7 @@ Public Sub BuildUniqueSignatureFromFiles()
                 CollectMarkedInPresentation pres, targets, others
             End If
         End If
+ContLoop:
     Next v
 
     If targets.Count = 0 Then
