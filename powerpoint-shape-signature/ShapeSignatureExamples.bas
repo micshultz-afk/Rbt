@@ -1,58 +1,67 @@
 Attribute VB_Name = "ShapeSignatureExamples"
 '==============================================================================
-' Примеры использования ShapeSignature (PowerPoint 2013+)
-' Импортируйте вместе с ShapeSignature.bas
+' Примеры (offline). Импортируйте вместе с ShapeSignature.bas
 '==============================================================================
 Option Explicit
 
-'--- Пример 1: быстрая проверка выделенной фигуры ----------------------------
+Public Sub Example_BuildByName()
+    Dim sig As String
+    Dim pres As Presentation
+    Dim shp As Shape
+    Dim ok As Boolean
+
+    On Error GoTo Fail
+    Set pres = ActivePresentation
+    If pres Is Nothing Then
+        MsgBox "Нет активной презентации", vbExclamation
+        Exit Sub
+    End If
+
+    ' Задайте одно и то же Name фигурам-ролям на разных слайдах
+    sig = BuildSignatureByShapeName("MyTarget", pres)
+    If Len(sig) = 0 Then
+        MsgBox "Не удалось построить сигнатуру для имени MyTarget", vbExclamation
+        Exit Sub
+    End If
+
+    InputBox "Сигнатура:", "BuildSignatureByShapeName", sig
+
+    For Each shp In ActiveWindow.View.Slide.Shapes
+        ok = ShapeMatchesSignature(shp, sig)
+        If ok Then Debug.Print "match: " & shp.Name
+    Next shp
+    Exit Sub
+Fail:
+    MsgBox "Ошибка: " & Err.Description, vbCritical
+End Sub
+
 Public Sub Example_CheckSelected()
     Dim sig As String
     Dim ok As Boolean
     Dim shp As Shape
 
-    ' Вставьте сюда сигнатуру, полученную из BuildSignatureFromSelection
-    sig = "S1|..." ' замените на реальную строку
-
-    If Not (ActiveWindow.Selection.Type = ppSelectionShapes) Then
+    On Error GoTo Fail
+    sig = InputBox("Сигнатура:", "Проверка")
+    If Len(sig) = 0 Then Exit Sub
+    If ActiveWindow.Selection.Type <> ppSelectionShapes Then
         MsgBox "Выделите фигуру", vbExclamation
         Exit Sub
     End If
-
-    ' ByRef Shape — передаём переменную, не выражение ShapeRange(1)
     Set shp = ActiveWindow.Selection.ShapeRange(1)
     ok = ShapeMatchesSignature(shp, sig)
     MsgBox "Совпадает: " & ok
+    Exit Sub
+Fail:
+    MsgBox "Ошибка: " & Err.Description, vbCritical
 End Sub
 
-'--- Пример 2: найти все совпадения на текущем слайде ------------------------
-Public Sub Example_FindMatchesOnSlide()
-    Dim sig As String
-    Dim shp As Shape
-    Dim sld As Slide
-    Dim n As Long
-    Dim names As String
-
-    sig = InputBox("Сигнатура:", "Поиск на слайде")
-    If Len(sig) = 0 Then Exit Sub
-
-    Set sld = ActiveWindow.View.Slide
-    For Each shp In sld.Shapes
-        If ShapeMatchesSignature(shp, sig) Then
-            n = n + 1
-            names = names & shp.Name & " (Id=" & shp.Id & ")" & vbCrLf
-        End If
-    Next shp
-
-    MsgBox "Найдено: " & n & vbCrLf & names, vbInformation
-End Sub
-
-'--- Пример 3: обход всей презентации ----------------------------------------
-Public Function CountMatchesInPresentation(ByVal pres As Presentation, _
+Public Function CountMatchesInPresentation(ByRef pres As Presentation, _
                                            ByVal sig As String) As Long
     Dim sld As Slide
     Dim shp As Shape
     Dim n As Long
+    On Error GoTo SoftFail
+    CountMatchesInPresentation = 0
     If pres Is Nothing Then Exit Function
     For Each sld In pres.Slides
         For Each shp In sld.Shapes
@@ -60,17 +69,7 @@ Public Function CountMatchesInPresentation(ByVal pres As Presentation, _
         Next shp
     Next sld
     CountMatchesInPresentation = n
+    Exit Function
+SoftFail:
+    CountMatchesInPresentation = 0
 End Function
-
-'--- Пример 4: использовать в своём коде как предикат ------------------------
-Public Sub Example_ProcessIfMatch()
-    Dim sig As String
-    Dim shp As Shape
-    sig = "S1|..." ' ваша сигнатура
-
-    For Each shp In ActiveWindow.View.Slide.Shapes
-        If ShapeMatchesSignature(shp, sig) Then
-            ' ваша бизнес-логика
-        End If
-    Next shp
-End Sub
