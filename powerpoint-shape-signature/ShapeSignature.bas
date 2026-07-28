@@ -172,6 +172,8 @@ Public Sub BuildUniqueSignatureFromFiles()
     Dim openedHere As Collection
     Dim i As Long
     Dim si As Long
+    Dim errNum As Long
+    Dim errDesc As String
 
     On Error GoTo Fail
     Set paths = New Collection
@@ -188,7 +190,13 @@ Public Sub BuildUniqueSignatureFromFiles()
         End With
     End If
 
-    ' 2) Диалог выбора файлов
+    ' 2) Помеченные тегом в активной презентации (до диалога — иначе Cancel ломает сценарий только с тегами)
+    If Not ActivePresentation Is Nothing Then
+        CollectMarkedTargetsOnly ActivePresentation, targets
+    End If
+    DeduplicateShapes targets
+
+    ' 3) Диалог выбора файлов
     Set fd = Application.FileDialog(msoFileDialogFilePicker)
     With fd
         .AllowMultiSelect = True
@@ -210,7 +218,7 @@ Public Sub BuildUniqueSignatureFromFiles()
         End If
     End With
 
-    ' 3) Семена для поиска аналогов
+    ' 4) Семена для поиска аналогов
     Dim seedFeats() As ShapeFeat
     Dim hasSeeds As Boolean
     hasSeeds = False
@@ -222,7 +230,7 @@ Public Sub BuildUniqueSignatureFromFiles()
         Next i
     End If
 
-    ' 4) Активная презентация целиком
+    ' 5) Активная презентация целиком (цели + антипримеры)
     If Not ActivePresentation Is Nothing Then
         If hasSeeds Then
             CollectBySeedInPresentation ActivePresentation, seedFeats, targets, others
@@ -231,7 +239,7 @@ Public Sub BuildUniqueSignatureFromFiles()
         End If
     End If
 
-    ' 5) Обход выбранных файлов: теги ИЛИ совпадение с семенем
+    ' 6) Обход выбранных файлов: теги ИЛИ совпадение с семенем
     Dim activePath As String
     activePath = ""
     On Error Resume Next
@@ -279,10 +287,12 @@ ContLoop:
     CleanupOpened openedHere
     Exit Sub
 Fail:
+    errNum = Err.Number
+    errDesc = Err.Description
     On Error Resume Next
     CleanupOpened openedHere
     On Error GoTo 0
-    MsgBox "Ошибка BuildUniqueSignatureFromFiles: " & Err.Description, vbCritical
+    MsgBox "Ошибка BuildUniqueSignatureFromFiles (" & CStr(errNum) & "): " & errDesc, vbCritical
 End Sub
 
 '--- Проверка: соответствует ли Shape сигнатуре?  True / False ---------------
@@ -376,7 +386,7 @@ Private Function ExtractFeatures(ByVal shp As Shape) As ShapeFeat
     Dim f As ShapeFeat
     Dim sld As Slide
     Dim sw As Double, sh As Double
-    Dim effType As Long
+    Dim pres As Presentation
 
     On Error GoTo SoftFail
     f.Valid = False
@@ -384,9 +394,13 @@ Private Function ExtractFeatures(ByVal shp As Shape) As ShapeFeat
 
     Set sld = ParentSlide(shp)
     If sld Is Nothing Then
-        ' fallback: берём PageSetup активной презентации
-        sw = ActivePresentation.PageSetup.SlideWidth
-        sh = ActivePresentation.PageSetup.SlideHeight
+        On Error Resume Next
+        Set pres = ActivePresentation
+        If pres Is Nothing Then GoTo SoftFail
+        sw = pres.PageSetup.SlideWidth
+        sh = pres.PageSetup.SlideHeight
+        Err.Clear
+        On Error GoTo SoftFail
     Else
         sw = sld.Parent.PageSetup.SlideWidth
         sh = sld.Parent.PageSetup.SlideHeight
@@ -395,18 +409,30 @@ Private Function ExtractFeatures(ByVal shp As Shape) As ShapeFeat
 
     f.TypeId = CLng(shp.Type)
 
-    ' Эффективный «автотип»: для placeholder — ContainedType
     f.AutoId = -1
     f.PhType = -1
     On Error Resume Next
     If shp.Type = msoPlaceholder Then
         f.PhType = CLng(shp.PlaceholderFormat.Type)
+        If Err.Number <> 0 Then
+            Err.Clear
+            f.PhType = -1
+        End If
         f.AutoId = CLng(shp.PlaceholderFormat.ContainedType)
+        If Err.Number <> 0 Then
+            Err.Clear
+            f.AutoId = -1
+        End If
     ElseIf shp.Type = msoAutoShape Or shp.Type = msoFreeform Then
         f.AutoId = CLng(shp.AutoShapeType)
+        If Err.Number <> 0 Then
+            Err.Clear
+            f.AutoId = -1
+        End If
     Else
         f.AutoId = CLng(shp.Type)
     End If
+    Err.Clear
     On Error GoTo SoftFail
 
     f.L = ClampLng(CLng(Round((shp.Left / sw) * GEO_SCALE, 0)), 0, GEO_SCALE * 2)
@@ -420,10 +446,17 @@ Private Function ExtractFeatures(ByVal shp As Shape) As ShapeFeat
         f.AR = 0
     End If
 
+    On Error Resume Next
     f.Rot = CLng(Round(shp.Rotation * 10#, 0))
+    If Err.Number <> 0 Then
+        Err.Clear
+        f.Rot = 0
+    End If
     f.Flip = 0
     If shp.HorizontalFlip Then f.Flip = f.Flip Or 1
     If shp.VerticalFlip Then f.Flip = f.Flip Or 2
+    Err.Clear
+    On Error GoTo SoftFail
 
     f.FillKey = ReadFillKey(shp)
     f.LineKey = ReadLineKey(shp)
@@ -454,25 +487,27 @@ Private Function ReadFillKey(ByVal shp As Shape) As String
     Err.Clear
     If t = msoFillSolid Then
         rgbv = CLng(shp.Fill.ForeColor.RGB)
-        ReadFillKey = CStr(t) & ":" & Hex$(rgbv And &HFFFFFF)
+        ReadFillKey = CStr(t) & ":" & UCase$(Right$("000000" & Hex$(rgbv And &HFFFFFF), 6))
     Else
         ReadFillKey = CStr(t)
     End If
 End Function
 
 Private Function ReadLineKey(ByVal shp As Shape) As String
-    Dim vis As Long
     Dim rgbv As Long
     Dim w As Long
     On Error Resume Next
-    If shp.Line.Visible = msoFalse Then
+    If shp.Line.Visible <> msoTrue Then
         ReadLineKey = "0"
         Exit Function
     End If
-    vis = 1
     rgbv = CLng(shp.Line.ForeColor.RGB)
     w = CLng(Round(shp.Line.Weight * 100#, 0))
-    ReadLineKey = "1:" & Hex$(rgbv And &HFFFFFF) & ":" & ToB36(w)
+    If Err.Number <> 0 Then
+        ReadLineKey = "1"
+        Exit Function
+    End If
+    ReadLineKey = "1:" & UCase$(Right$("000000" & Hex$(rgbv And &HFFFFFF), 6)) & ":" & ToB36(w)
 End Function
 
 Private Function ReadCaps(ByVal shp As Shape) As Long
@@ -697,59 +732,63 @@ Private Function BuildDiscriminatingSignature(ByVal targets As Collection, _
     Dim bits() As String
     Dim mask As Long
     Dim bit As Long
-    Dim okTargets As Boolean
     Dim unique As Boolean
     Dim prototype As ShapeFeat
     Dim sig As String
+    Dim hasOthers As Boolean
+
+    outMask = 0
+    BuildDiscriminatingSignature = ""
+
+    If targets Is Nothing Then
+        report = "Коллекция целей пуста (Nothing)."
+        Exit Function
+    End If
+    If targets.Count = 0 Then
+        report = "Коллекция целей пуста."
+        Exit Function
+    End If
+    If others Is Nothing Then Set others = New Collection
 
     ReDim tFeats(1 To targets.Count)
     For i = 1 To targets.Count
         tFeats(i) = ExtractFeatures(targets(i))
         If Not tFeats(i).Valid Then
             report = "Не удалось извлечь признаки у целевой фигуры #" & CStr(i)
-            outMask = 0
-            BuildDiscriminatingSignature = ""
             Exit Function
         End If
     Next i
 
-    If others.Count > 0 Then
+    hasOthers = (others.Count > 0)
+    If hasOthers Then
         ReDim oFeats(1 To others.Count)
         For i = 1 To others.Count
             oFeats(i) = ExtractFeatures(others(i))
         Next i
     End If
 
-    ' Проверяем согласованность целей на полном наборе признаков
-    If Not AllTargetsAgree(tFeats, F_ALL) Then
-        ' Цели различаются — берём пересечение стабильных признаков
-        mask = StableMaskAcrossTargets(tFeats)
-        If mask = 0 Then
-            report = "Целевые фигуры слишком различаются: общий стабильный набор признаков пуст."
-            outMask = 0
-            BuildDiscriminatingSignature = ""
-            Exit Function
-        End If
-    Else
-        mask = 0
-    End If
-
     bits = Split(DISC_ORDER, ",")
-    ' Жадное наращивание маски до уникальности относительно others
+    mask = 0
     unique = False
+
+    ' Жадное наращивание: только стабильные на всех целях биты, пока не уникальны среди others
     For j = 0 To UBound(bits)
         bit = CLng(bits(j))
         If (mask And bit) = 0 Then
-            ' добавляем бит только если он стабилен на всех targets
             If AllTargetsAgree(tFeats, mask Or bit) Then
                 mask = mask Or bit
             End If
         End If
-        If mask <> 0 Then
-            If others.Count = 0 Then
+
+        If mask = 0 Then GoTo ContBits
+
+        If Not hasOthers Then
+            ' Без антипримеров не останавливаемся на первом бите — набираем структурный минимум
+            If (mask And SEED_FIND_MASK) = SEED_FIND_MASK Then
                 unique = True
                 Exit For
             End If
+        Else
             unique = True
             For i = 1 To others.Count
                 If oFeats(i).Valid Then
@@ -761,9 +800,19 @@ Private Function BuildDiscriminatingSignature(ByVal targets As Collection, _
             Next i
             If unique Then Exit For
         End If
+ContBits:
     Next j
 
-    ' Прототип = первая цель (все согласованы по mask)
+    If Not hasOthers And mask <> 0 And (mask And SEED_FIND_MASK) <> SEED_FIND_MASK Then
+        ' Набрали сколько смогли из стабильных структурных
+        unique = True
+    End If
+
+    If mask = 0 Then
+        report = "Не удалось сформировать стабильную маску признаков для целей."
+        Exit Function
+    End If
+
     prototype = tFeats(1)
     outMask = mask
     sig = BuildSignatureString(mask, prototype)
@@ -775,7 +824,7 @@ Private Function BuildDiscriminatingSignature(ByVal targets As Collection, _
     If Not unique Then
         report = report & vbCrLf & _
                  "ВНИМАНИЕ: полной уникальности на обучающей выборке не достигнуто." & vbCrLf & _
-                 "Сигнатура всё же построена по стабильным признакам целей."
+                 "Сигнатура построена по стабильным признакам целей."
     End If
 
     BuildDiscriminatingSignature = sig
@@ -783,6 +832,8 @@ End Function
 
 Private Function AllTargetsAgree(ByRef tFeats() As ShapeFeat, ByVal mask As Long) As Boolean
     Dim i As Long
+    AllTargetsAgree = False
+    If mask = 0 Then Exit Function
     AllTargetsAgree = True
     For i = 2 To UBound(tFeats)
         If Not FeaturesEqualMask(tFeats(1), tFeats(i), mask) Then
@@ -792,29 +843,16 @@ Private Function AllTargetsAgree(ByRef tFeats() As ShapeFeat, ByVal mask As Long
     Next i
 End Function
 
-Private Function StableMaskAcrossTargets(ByRef tFeats() As ShapeFeat) As Long
-    Dim candidates As Variant
-    Dim i As Long
-    Dim bit As Long
-    Dim m As Long
-    candidates = Array(F_TYPE, F_AUTO, F_PH, F_CAPS, F_AR, F_GEO, F_ROT, F_FLIP, F_FILL, F_LINE, F_FONT, F_TXH)
-    m = 0
-    For i = LBound(candidates) To UBound(candidates)
-        bit = CLng(candidates(i))
-        If AllTargetsAgree(tFeats, bit) Then m = m Or bit
-    Next i
-    StableMaskAcrossTargets = m
-End Function
 
 Private Function FeaturesEqualMask(ByRef a As ShapeFeat, ByRef b As ShapeFeat, ByVal mask As Long) As Boolean
-    ' Используем ту же семантику допуска, что и матчер
+    ' Та же семантика допуска, что у ShapeMatchesSignature
     Dim enc As String
     Dim feat() As String
+    FeaturesEqualMask = False
+    If mask = 0 Then Exit Function
+    If Not a.Valid Or Not b.Valid Then Exit Function
     enc = EncodeFeatures(mask, a)
-    If Len(enc) = 0 Then
-        FeaturesEqualMask = (mask = 0)
-        Exit Function
-    End If
+    If Len(enc) = 0 Then Exit Function
     feat = Split(enc, ";")
     FeaturesEqualMask = FeaturesMatchMask(b, mask, feat)
 End Function
@@ -844,6 +882,30 @@ End Function
 '==============================================================================
 ' СБОР ФИГУР ИЗ ПРЕЗЕНТАЦИЙ
 '==============================================================================
+Private Sub CollectMarkedTargetsOnly(ByVal pres As Presentation, _
+                                      ByVal targets As Collection)
+    Dim sld As Slide
+    Dim shp As Shape
+    For Each sld In pres.Slides
+        For Each shp In sld.Shapes
+            CollectMarkedTargetsTree shp, targets
+        Next shp
+    Next sld
+End Sub
+
+Private Sub CollectMarkedTargetsTree(ByVal shp As Shape, ByVal targets As Collection)
+    Dim i As Long
+    If shp Is Nothing Then Exit Sub
+    If IsMarkedTarget(shp) Then targets.Add shp
+    If shp.Type = msoGroup Then
+        On Error Resume Next
+        For i = 1 To shp.GroupItems.Count
+            CollectMarkedTargetsTree shp.GroupItems(i), targets
+        Next i
+        On Error GoTo 0
+    End If
+End Sub
+
 Private Sub CollectMarkedInPresentation(ByVal pres As Presentation, _
                                         ByVal targets As Collection, _
                                         ByVal others As Collection)
@@ -851,7 +913,7 @@ Private Sub CollectMarkedInPresentation(ByVal pres As Presentation, _
     Dim shp As Shape
     For Each sld In pres.Slides
         For Each shp In sld.Shapes
-            CollectShapeTree shp, targets, others, False
+            CollectShapeTree shp, targets, others
         Next shp
     Next sld
 End Sub
@@ -919,10 +981,8 @@ End Sub
 
 Private Sub CollectShapeTree(ByVal shp As Shape, _
                              ByVal targets As Collection, _
-                             ByVal others As Collection, _
-                             ByVal ancestorMarked As Boolean)
+                             ByVal others As Collection)
     Dim i As Long
-    ' Метка не наследуется на детей: помечается только явно выбранный объект
     If IsMarkedTarget(shp) Then
         targets.Add shp
     Else
@@ -932,7 +992,7 @@ Private Sub CollectShapeTree(ByVal shp As Shape, _
     If shp.Type = msoGroup Then
         On Error Resume Next
         For i = 1 To shp.GroupItems.Count
-            CollectShapeTree shp.GroupItems(i), targets, others, False
+            CollectShapeTree shp.GroupItems(i), targets, others
         Next i
         On Error GoTo 0
     End If
@@ -1032,16 +1092,11 @@ Private Sub RemoveTargetsFromOthers(ByVal targets As Collection, ByVal others As
 End Sub
 
 Private Function IsSameShapeRef(ByVal a As Shape, ByVal b As Shape) As Boolean
-    Dim sa As Slide
-    Dim sb As Slide
+    ' Только сравнение ссылок: Id+SlideID не уникальны между разными презентациями
     On Error Resume Next
     IsSameShapeRef = False
     If a Is Nothing Or b Is Nothing Then Exit Function
-    If a.Id <> b.Id Then Exit Function
-    Set sa = ParentSlide(a)
-    Set sb = ParentSlide(b)
-    If sa Is Nothing Or sb Is Nothing Then Exit Function
-    IsSameShapeRef = (sa.SlideID = sb.SlideID)
+    IsSameShapeRef = (a Is b)
 End Function
 
 Private Function IsMarkedTarget(ByVal shp As Shape) As Boolean
@@ -1162,16 +1217,6 @@ Private Function FindOpenPresentation(ByVal fullPath As String) As Presentation
     Set FindOpenPresentation = Nothing
 End Function
 
-Private Function GetFileName(ByVal fullPath As String) As String
-    Dim i As Long
-    i = InStrRev(fullPath, "\")
-    If i = 0 Then i = InStrRev(fullPath, "/")
-    If i > 0 Then
-        GetFileName = Mid$(fullPath, i + 1)
-    Else
-        GetFileName = fullPath
-    End If
-End Function
 
 Private Sub CleanupOpened(ByVal openedHere As Collection)
     Dim i As Long

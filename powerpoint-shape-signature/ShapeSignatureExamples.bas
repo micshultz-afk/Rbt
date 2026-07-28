@@ -9,16 +9,19 @@ Option Explicit
 Public Sub Example_CheckSelected()
     Dim sig As String
     Dim ok As Boolean
+    Dim shp As Shape
 
     ' Вставьте сюда сигнатуру, полученную из BuildSignatureFromSelection
     sig = "S1|..." ' замените на реальную строку
 
-    If ActiveWindow.Selection.Type <> ppSelectionShapes Then
+    If Not (ActiveWindow.Selection.Type = ppSelectionShapes) Then
         MsgBox "Выделите фигуру", vbExclamation
         Exit Sub
     End If
 
-    ok = ShapeMatchesSignature(ActiveWindow.Selection.ShapeRange(1), sig)
+    ' ByRef Shape — передаём переменную, не выражение ShapeRange(1)
+    Set shp = ActiveWindow.Selection.ShapeRange(1)
+    ok = ShapeMatchesSignature(shp, sig)
     MsgBox "Совпадает: " & ok
 End Sub
 
@@ -38,8 +41,6 @@ Public Sub Example_FindMatchesOnSlide()
         If ShapeMatchesSignature(shp, sig) Then
             n = n + 1
             names = names & shp.Name & " (Id=" & shp.Id & ")" & vbCrLf
-            ' можно сразу пометить:
-            ' shp.Line.ForeColor.RGB = RGB(255, 0, 0)
         End If
     Next shp
 
@@ -52,6 +53,7 @@ Public Function CountMatchesInPresentation(ByVal pres As Presentation, _
     Dim sld As Slide
     Dim shp As Shape
     Dim n As Long
+    If pres Is Nothing Then Exit Function
     For Each sld In pres.Slides
         For Each shp In sld.Shapes
             If ShapeMatchesSignature(shp, sig) Then n = n + 1
@@ -68,8 +70,7 @@ Public Sub Example_ProcessIfMatch()
 
     For Each shp In ActiveWindow.View.Slide.Shapes
         If ShapeMatchesSignature(shp, sig) Then
-            ' ваша бизнес-логика:
-            ' shp.TextFrame.TextRange.Text = "OK"
+            ' ваша бизнес-логика
         End If
     Next shp
 End Sub
