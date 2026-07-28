@@ -5,7 +5,7 @@ Attribute VB_Name = "ShapeSignatureExamples"
 '==============================================================================
 Option Explicit
 
-'--- 1. Обучение: плохие файлы + правильные файлы -----------------------------
+'--- 1. Обучение: файлы с ошибками + эталонные файлы --------------------------
 Public Sub Example_Train()
     Dim badFiles As String
     Dim goodFiles As String
@@ -29,7 +29,7 @@ Public Sub Example_Train()
     Debug.Print "Сигнатура: " & sig
     Debug.Print LastTrainReport()
 
-    ' Сохранить в каталоге внутри презентации (переносится вместе с файлом)
+    ' Сохранить в каталоге тегов презентации (переносится вместе с файлом)
     SaveSignatureToPresentation ActivePresentation, "FOOTER", sig
 
     InputBox LastTrainReport(), "Обучение завершено", sig
@@ -88,7 +88,7 @@ Public Sub Example_ProcessEachSlide()
         ElseIf ShapeMatchesSignature(shp, sig) Then
             log = log & "Слайд " & sld.SlideIndex & ": «" & shp.Name & "» " & pct & "% — " & _
                   DescribeFormatDeviations(shp, sig) & vbCrLf
-            ' здесь вызывайте свой код исправления форматирования для shp
+            ' Здесь вызывайте свой код исправления форматирования для shp
         Else
             log = log & "Слайд " & sld.SlideIndex & ": ниже порога (" & pct & "%)" & vbCrLf
         End If

@@ -1,26 +1,26 @@
 Attribute VB_Name = "ShapeSignature"
 '==============================================================================
 ' ShapeSignature — PowerPoint 2013 VBA
-' Обучаемые сигнатуры текстовых блоков (колонтитулы, Label и любые другие).
+' Обучаемые сигнатуры текстовых блоков: колонтитулы, Label и другие объекты.
 '
-' Среда: без Интернета, без CreateObject / Scripting / MSForms / внешних DLL.
-' В PowerPoint нет ThisPresentation — все методы принимают путь или объект явно.
+' Среда: без интернета, без CreateObject / Scripting / MSForms / внешних DLL.
+' В PowerPoint нет ThisPresentation — методы принимают путь или объект явно.
 '
-' ОБУЧЕНИЕ (опыт хранится внутри строки-сигнатуры):
+' ОБУЧЕНИЕ (опыт хранится в строке-сигнатуре):
 '   sig = TrainSignatureFromFiles(badFiles, badName, goodFiles, goodName)
-'     badFiles  — пути к файлам с НЕПРАВИЛЬНЫМ форматированием через ";"
-'     goodFiles — пути к файлам с ПРАВИЛЬНЫМ форматированием через ";"
-'     badName / goodName — имя фигуры (одинаковое на нужных слайдах)
+'     badFiles  — пути через ";" к файлам с неправильным форматированием
+'     goodFiles — пути через ";" к файлам с правильным форматированием
+'     badName / goodName — имя фигуры (одно и то же на нужных слайдах)
 '
-'   Оба набора дают признаки РОЛИ объекта (что он есть).
-'   Правильные файлы дополнительно дают ЭТАЛОН ФОРМАТА (как должно быть).
-'   Признаки, которые «плавают» между примерами, автоматически отключаются.
+'   Оба набора дают признаки роли объекта (чем он является).
+'   Правильные файлы дополнительно дают эталон формата (как должно выглядеть).
+'   Признаки, которые «плавают» между примерами, отключаются автоматически.
 '
 ' РАСПОЗНАВАНИЕ:
 '   pct = ShapeSimilarityPercent(shp, sig)      ' 0..100
 '   ok  = ShapeMatchesSignature(shp, sig)       ' True/False по порогу из сигнатуры
-'   txt = ShapeSimilarityExplain(shp, sig)      ' понятное объяснение
-'   dev = DescribeFormatDeviations(shp, sig)    ' что не так с форматированием
+'   txt = ShapeSimilarityExplain(shp, sig)      ' разбор результата
+'   dev = DescribeFormatDeviations(shp, sig)    ' отклонения от эталона формата
 '==============================================================================
 Option Explicit
 
@@ -33,11 +33,11 @@ Private Const G8 As Long = 255
 
 '----- Биты активных признаков роли -------------------------------------------
 Private Const R_ZONE As Long = 1        ' зона центра фигуры
-Private Const R_SIZE As Long = 2        ' полоса размеров
+Private Const R_SIZE As Long = 2        ' диапазон размеров
 Private Const R_AR As Long = 4          ' пропорции
-Private Const R_TYPE As Long = 8        ' множество типов фигур
-Private Const R_PH As Long = 16         ' множество типов placeholder
-Private Const R_FLAGS As Long = 32      ' обязательные признаки-флаги
+Private Const R_TYPE As Long = 8        ' набор допустимых типов фигур
+Private Const R_PH As Long = 16         ' набор типов placeholder
+Private Const R_FLAGS As Long = 32      ' обязательные флаги
 Private Const R_TXT As Long = 64        ' структура текста
 Private Const R_FONTREL As Long = 128   ' относительный кегль
 Private Const R_ROT As Long = 256       ' поворот
@@ -73,7 +73,7 @@ Private Const LIM_PARA_H As Long = 30
 Private Const LIM_ROT_H As Long = 20
 Private Const LIM_TYPE_COUNT As Long = 6
 
-'----- Запасы мягкого затухания ----------------------------------------------
+'----- Допуски мягкого затухания ----------------------------------------------
 Private Const SLACK_ZONE As Long = 32
 Private Const SLACK_SIZE As Long = 26
 Private Const SLACK_AR As Long = 16
@@ -181,21 +181,21 @@ Private Type RoleSig
     FmtCyH As Long
 End Type
 
-'----- Кеш разбора сигнатуры (ускоряет циклы поиска) -------------------------
+'----- Кэш разбора сигнатуры (ускоряет циклы поиска) -------------------------
 Private m_cacheSig As String
 Private m_cacheRole As RoleSig
 Private m_lastReport As String
 
 '==============================================================================
-' ПУБЛИЧНОЕ API — ОБУЧЕНИЕ
+' ПУБЛИЧНЫЙ API — ОБУЧЕНИЕ
 '==============================================================================
 
 '--- Основной метод обучения --------------------------------------------------
-' badFiles  : "C:\a.pptx;C:\b.pptx"  — неправильное форматирование
+' badFiles  : "C:\a.pptx;C:\b.pptx"  — файлы с неправильным форматированием
 ' badName   : имя фигуры в этих файлах
-' goodFiles : "C:\ok1.pptx;C:\ok2.pptx" — правильное форматирование (может быть "")
+' goodFiles : "C:\ok1.pptx;C:\ok2.pptx" — файлы с правильным форматированием (можно "")
 ' goodName  : имя фигуры в правильных файлах (если "" — берётся badName)
-' Возврат   : строка-сигнатура с накопленным опытом ("" при неудаче)
+' Возврат   : строка-сигнатура с накопленным опытом ("" при ошибке)
 Public Function TrainSignatureFromFiles(ByVal badFiles As String, _
                                         ByVal badName As String, _
                                         Optional ByVal goodFiles As String = "", _
@@ -338,10 +338,10 @@ SoftFail:
 End Function
 
 '==============================================================================
-' ПУБЛИЧНОЕ API — РАСПОЗНАВАНИЕ
+' ПУБЛИЧНЫЙ API — РАСПОЗНАВАНИЕ
 '==============================================================================
 
-'--- Похожесть в процентах: ByRef Shape + сигнатура → 0..100 -----------------
+'--- Похожесть в процентах (Shape + сигнатура → 0..100) ---------------------
 Public Function ShapeSimilarityPercent(ByRef shp As Shape, ByVal sig As String) As Long
     Dim r As RoleSig
     Dim f As ShapeFeat
@@ -382,7 +382,7 @@ SoftFail:
     ShapeMatchesSignature = False
 End Function
 
-'--- Понятное объяснение результата ------------------------------------------
+'--- Разбор результата -------------------------------------------------------
 Public Function ShapeSimilarityExplain(ByRef shp As Shape, ByVal sig As String) As String
     Dim r As RoleSig
     Dim f As ShapeFeat
@@ -434,7 +434,7 @@ SoftFail:
     ShapeSimilarityExplain = "0% — сбой сравнения: " & Err.Description
 End Function
 
-'--- Отклонения формата от эталона (для вашего исправителя) ------------------
+'--- Отклонения формата от эталона (для вашей процедуры исправления) ---------
 Public Function DescribeFormatDeviations(ByRef shp As Shape, ByVal sig As String) As String
     Dim r As RoleSig
     Dim f As ShapeFeat
@@ -492,10 +492,10 @@ SoftFail:
 End Function
 
 '==============================================================================
-' ПУБЛИЧНОЕ API — ПОИСК
+' ПУБЛИЧНЫЙ API — ПОИСК
 '==============================================================================
 
-'--- Лучший кандидат на слайде (для роли «один объект на слайд») -------------
+'--- Лучший кандидат на слайде (режим «один объект на слайд») ----------------
 Public Function FindBestMatchOnSlide(ByRef sld As Slide, ByVal sig As String, _
                                      Optional ByRef outPercent As Long, _
                                      Optional ByRef outAmbiguous As Boolean) As Shape
@@ -607,7 +607,7 @@ SoftFail:
 End Function
 
 '==============================================================================
-' ПУБЛИЧНОЕ API — КАТАЛОГ СИГНАТУР В ТЕГАХ ПРЕЗЕНТАЦИИ
+' ПУБЛИЧНЫЙ API — КАТАЛОГ СИГНАТУР В ТЕГАХ ПРЕЗЕНТАЦИИ
 '==============================================================================
 Public Function SaveSignatureToPresentation(ByRef pres As Presentation, _
                                             ByVal key As String, _
@@ -945,7 +945,7 @@ Private Sub BuildRoleFromAcc(ByRef accAll As Acc, ByRef accGood As Acc, _
         End If
     End If
 
-    ' Относительный кегль (часто это и есть дефект — легко отключается)
+    ' Относительный кегль (часто отражает дефект — признак легко отключается)
     If accAll.FontRel.HasVal Then
         CenterHalf accAll.FontRel, 2, r.FontRelC, r.FontRelH
         If r.FontRelH <= LIM_FONT_H Then
@@ -1028,7 +1028,7 @@ SoftFail:
 End Function
 
 '==============================================================================
-' ИЗВЛЕЧЕНИЕ ПРИЗНАКОВ (двухфазное: дёшево → дорого)
+' ИЗВЛЕЧЕНИЕ ПРИЗНАКОВ (сначала дешёвые, затем дорогие)
 '==============================================================================
 Private Function ExtractCheap(ByVal shp As Shape, ByRef f As ShapeFeat) As Boolean
     Dim sld As Slide
@@ -1131,7 +1131,7 @@ Private Sub ExtractDeep(ByVal shp As Shape, ByRef f As ShapeFeat)
     If f.Deep Then Exit Sub
     f.Deep = True
 
-    ' Заливка: важен факт выделения, а не конкретный цвет
+    ' Заливка: важен сам факт заливки, а не конкретный цвет
     If shp.Fill.Visible = msoTrue Then
         f.Flags = f.Flags Or FL_FILL
         ct = CLng(shp.Fill.Type)
@@ -1220,7 +1220,7 @@ Private Sub FeatInit(ByRef f As ShapeFeat)
 End Sub
 
 Private Function NormalizeAngle(ByVal deg As Single) As Double
-    ' Без циклов: защита от зацикливания на аномальных значениях
+    ' Без Do/While: защита от зацикливания при аномальных углах
     Dim d As Double
     On Error GoTo SoftFail
     d = CDbl(deg)
@@ -1275,7 +1275,7 @@ Private Function LenBucket(ByVal s As String) As Long
     End If
 End Function
 
-' Грубая корзина цвета: устойчива к смене оттенка, различает «цветной / нет»
+' Грубая корзина цвета: устойчива к смене оттенка, отличает цветной от нейтрального
 Private Function ColorBucket(ByVal rgbv As Long) As Long
     Dim r As Long, g As Long, b As Long
     Dim mx As Long, mn As Long
@@ -1363,7 +1363,7 @@ Private Function PassGates(ByRef f As ShapeFeat, ByRef r As RoleSig, _
         End If
     End If
 
-    ' Грубый отсев по зоне (дёшево, до чтения текста и шрифта)
+    ' Грубый отсев по зоне (до чтения текста и шрифта)
     If (r.Mask And R_ZONE) <> 0 Then
         If Abs(f.Cx - r.CxC) > r.CxH + SLACK_ZONE * 3 Then
             reason = "далеко по горизонтали от обученной зоны"
@@ -1504,7 +1504,7 @@ Private Function BandScore(ByVal v As Long, ByVal c As Long, ByVal h As Long, _
     End If
 End Function
 
-' Широкий диапазон → признак менее надёжен → меньший вес (но не ноль)
+' Чем шире диапазон, тем менее надёжен признак — вес ниже, но не нулевой
 Private Function Stability(ByVal h As Long, ByVal maxH As Long) As Double
     Dim k As Double
     If maxH <= 0 Then
@@ -1539,7 +1539,7 @@ Private Function FlagScore(ByVal actual As Long, ByVal required As Long) As Doub
     End If
 End Function
 
-' Корзина совпала → 1; соседняя → 0.6; иначе → 0.25 (текст может меняться)
+' Совпадение корзины → 1; соседняя → 0.6; иначе → 0.25 (текст может меняться)
 Private Function BucketScore(ByVal setMask As Long, ByVal b As Long) As Double
     If setMask = 0 Then
         BucketScore = 1#
@@ -1777,7 +1777,7 @@ SoftFail:
     DecodeRoleSig = False
 End Function
 
-' Разбор с кешем: в циклах поиска сигнатура парсится один раз
+' Разбор с кэшем: в циклах поиска сигнатура разбирается один раз
 Private Function GetRole(ByVal sig As String, ByRef r As RoleSig) As Boolean
     On Error GoTo SoftFail
     GetRole = False
@@ -2145,8 +2145,8 @@ Private Function Fnv1aBytes(ByRef buf() As Byte, ByVal n As Long) As Long
 End Function
 
 Private Function FnvMul(ByVal h As Long) As Long
-    ' (h * 16777619) mod 2^32 через 16-битные половины:
-    ' все промежуточные значения остаются точными в Double
+    ' (h * 16777619) mod 2^32 через 16-битные половины,
+    ' чтобы промежуточные значения оставались точными в Double
     Dim uh As Double
     Dim lo As Double
     Dim hi As Double
