@@ -10,7 +10,7 @@ Attribute VB_Name = "ShapeSignature"
 ' Публичный API:
 '   MarkSelectedAsTargets
 '   ClearTargetMarks
-'   BuildUniqueSignatureFromFiles   — мультивыбор файлов + анализ уникальности
+'   BuildUniqueSignatureFromFiles   — мультивыбор файлов; поиск аналогов по семени/тегам
 '   BuildSignatureFromSelection     — быстрый анализ выделения vs соседей
 '   ShapeMatchesSignature(shp, sig) As Boolean
 '   MakeSignatureFromShape(shp) As String
@@ -48,6 +48,8 @@ Private Const F_CAPS As Long = 512        ' bit 9  — hasText/Table/Chart/Group
 Private Const F_TXH As Long = 1024        ' bit 10 — hash текста
 Private Const F_FONT As Long = 2048       ' bit 11 — font name hash + rel size
 Private Const F_ALL As Long = 4095        ' все биты 0..11
+' Маска поиска «похожих» целей в других файлах (без Fill/Text — они могут плавать)
+Private Const SEED_FIND_MASK As Long = F_TYPE + F_AUTO + F_PH + F_CAPS + F_AR + F_GEO + F_ROT + F_FLIP
 
 ' Порядок добавления признаков при поиске минимальной уникальной маски
 Private Const DISC_ORDER As String = "1,2,4,512,16,8,32,64,128,256,2048,1024"
@@ -214,7 +216,19 @@ Public Sub BuildUniqueSignatureFromFiles()
         End If
     End With
 
-    ' 4) Обход выбранных файлов
+    ' 4) Семена для поиска аналогов в других файлах
+    Dim seedFeats() As ShapeFeat
+    Dim hasSeeds As Boolean
+    hasSeeds = False
+    If targets.Count > 0 Then
+        ReDim seedFeats(1 To targets.Count)
+        For i = 1 To targets.Count
+            seedFeats(i) = ExtractFeatures(targets(i))
+            If seedFeats(i).Valid Then hasSeeds = True
+        Next i
+    End If
+
+    ' 5) Обход выбранных файлов: теги ИЛИ совпадение с семенем
     For Each v In paths
         p = CStr(v)
         wasOpen = IsPresentationOpen(p)
@@ -226,7 +240,11 @@ Public Sub BuildUniqueSignatureFromFiles()
             openedHere.Add pres
         End If
         If Not pres Is Nothing Then
-            CollectMarkedInPresentation pres, targets, others
+            If hasSeeds Then
+                CollectBySeedInPresentation pres, seedFeats, targets, others
+            Else
+                CollectMarkedInPresentation pres, targets, others
+            End If
         End If
     Next v
 
@@ -824,6 +842,67 @@ Private Sub CollectMarkedInPresentation(ByVal pres As Presentation, _
             CollectShapeTree shp, targets, others, False
         Next shp
     Next sld
+End Sub
+
+' Поиск целей по семени (признаки выделенных фигур) + тегам
+Private Sub CollectBySeedInPresentation(ByVal pres As Presentation, _
+                                        ByRef seedFeats() As ShapeFeat, _
+                                        ByVal targets As Collection, _
+                                        ByVal others As Collection)
+    Dim sld As Slide
+    Dim shp As Shape
+    For Each sld In pres.Slides
+        For Each shp In sld.Shapes
+            ClassifyShapeBySeed shp, seedFeats, targets, others
+            If shp.Type = msoGroup Then
+                CollectBySeedGroupItems shp, seedFeats, targets, others
+            End If
+        Next shp
+    Next sld
+End Sub
+
+Private Sub ClassifyShapeBySeed(ByVal shp As Shape, _
+                                ByRef seedFeats() As ShapeFeat, _
+                                ByVal targets As Collection, _
+                                ByVal others As Collection)
+    Dim f As ShapeFeat
+    Dim isTarget As Boolean
+    Dim k As Long
+    isTarget = IsMarkedTarget(shp)
+    If Not isTarget Then
+        f = ExtractFeatures(shp)
+        If f.Valid Then
+            For k = LBound(seedFeats) To UBound(seedFeats)
+                If seedFeats(k).Valid Then
+                    If FeaturesEqualMask(seedFeats(k), f, SEED_FIND_MASK) Then
+                        isTarget = True
+                        Exit For
+                    End If
+                End If
+            Next k
+        End If
+    End If
+    If isTarget Then
+        targets.Add shp
+    Else
+        others.Add shp
+    End If
+End Sub
+
+Private Sub CollectBySeedGroupItems(ByVal grp As Shape, _
+                                    ByRef seedFeats() As ShapeFeat, _
+                                    ByVal targets As Collection, _
+                                    ByVal others As Collection)
+    Dim i As Long
+    Dim shp As Shape
+    On Error Resume Next
+    For i = 1 To grp.GroupItems.Count
+        Set shp = grp.GroupItems(i)
+        ClassifyShapeBySeed shp, seedFeats, targets, others
+        If shp.Type = msoGroup Then
+            CollectBySeedGroupItems shp, seedFeats, targets, others
+        End If
+    Next i
 End Sub
 
 Private Sub CollectShapeTree(ByVal shp As Shape, _
