@@ -286,11 +286,11 @@ Fail:
 End Sub
 
 '--- Проверка: соответствует ли Shape сигнатуре?  True / False ---------------
-Public Function ShapeMatchesSignature(ByVal shp As Shape, ByVal sig As String) As Boolean
+' Сигнатура: ByRef Shape + ByVal String → Boolean. Других аргументов нет.
+Public Function ShapeMatchesSignature(ByRef shp As Shape, ByVal sig As String) As Boolean
     Dim mask As Long
     Dim feat() As String
     Dim f As ShapeFeat
-    Dim ok As Boolean
 
     ShapeMatchesSignature = False
     If shp Is Nothing Then Exit Function
@@ -298,8 +298,7 @@ Public Function ShapeMatchesSignature(ByVal shp As Shape, ByVal sig As String) A
 
     If Not ParseSignature(sig, mask, feat) Then Exit Function
     f = ExtractFeatures(shp)
-    ok = FeaturesMatchMask(f, mask, feat)
-    ShapeMatchesSignature = ok
+    ShapeMatchesSignature = FeaturesMatchMask(f, mask, feat)
 End Function
 
 '--- Полный вектор признаков одной фигуры (отладка / ручная сборка) ----------
