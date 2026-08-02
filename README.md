@@ -1,12 +1,22 @@
-# PowerPoint Shape Signature
+# Rbt — PowerPoint VBA utilities
 
-Офлайн VBA-модуль для PowerPoint 2013: устойчивые сигнатуры Shape и проверка совпадения.
+Офлайн VBA-модули для PowerPoint.
 
-См. [`powerpoint-shape-signature/README.md`](powerpoint-shape-signature/README.md).
+## Модули
 
-Ключевой API:
+### [`powerpoint-shape-signature/`](powerpoint-shape-signature/README.md)
+
+Устойчивые сигнатуры Shape и проверка совпадения.
 
 ```vba
 sig = BuildSignatureByShapeName("MyTarget", ActivePresentation)
 ok  = ShapeMatchesSignature(shp, sig)   ' True / False
+```
+
+### [`text-cleanup/`](text-cleanup/README.md)
+
+Надёжная замена множественных пробелов на один в любом `TextRange`.
+
+```vba
+n = CollapseMultiSpaces(shp.TextFrame.TextRange)   ' лишних удалено; -1 = ошибка
 ```
